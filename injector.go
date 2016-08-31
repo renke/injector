@@ -8,13 +8,7 @@ import (
 
 // Container …
 type Container struct {
-	dependencies []*dependency
-}
-
-type dependency struct {
-	ConstructorValue reflect.Value
-	ParameterTypes   []reflect.Type
-	ReturnType       reflect.Type
+	constructors []*constructor
 }
 
 // NewContainer …
@@ -24,88 +18,204 @@ func NewContainer() *Container {
 
 // Register …
 func (container *Container) Register(constructors ...interface{}) {
-	for _, constructor := range constructors {
-		constructorType := reflect.TypeOf(constructor)
+	for _, _constructor := range constructors {
+		_type := reflect.TypeOf(_constructor)
 
-		if constructorType.Kind() != reflect.Func {
-			panic("Provided constructor is not a function")
+		if _type.Kind() != reflect.Func {
+			panic(fmt.Sprintf("Constructor '%s' is not a function", _type))
 		}
 
-		if constructorType.NumOut() != 1 {
-			panic("Provided must have single return value")
+		if _type.NumOut() != 1 {
+			panic(fmt.Sprintf("Constructor '%s' must have single return value", _type))
 		}
 
-		constructorValue := reflect.ValueOf(constructor)
+		function := reflect.ValueOf(_constructor)
 
-		returnType := constructorType.Out(0)
+		var params []reflect.Type
 
-		var paramTypes []reflect.Type
-
-		for i := 0; i < constructorType.NumIn(); i++ {
-			paramType := constructorType.In(i)
-			paramTypes = append(paramTypes, paramType)
+		for i := 0; i < _type.NumIn(); i++ {
+			param := _type.In(i)
+			params = append(params, param)
 		}
 
-		dep := &dependency{
-			ConstructorValue: constructorValue,
-			ParameterTypes:   paramTypes,
-			ReturnType:       returnType,
+		returnType := _type.Out(0)
+
+		details := &constructor{
+			Function:   function,
+			Parameters: params,
+			ReturnType: returnType,
 		}
 
-		container.dependencies = append(container.dependencies, dep)
+		container.constructors = append(container.constructors, details)
 	}
 }
 
-func (container *Container) findDependencies(targetType reflect.Type) []*dependency {
-	var deps []*dependency
+// Resolve …
+func (container *Container) Resolve(root interface{}) {
+	resolver := newResolver(container)
 
-	for _, dep := range container.dependencies {
-		exactType := dep.ReturnType == targetType
+	rootType := reflect.TypeOf(root).Elem()
 
-		if exactType {
-			deps = append(deps, dep)
-			continue
-		}
+	// Add all types that should be resolved
+	for i := 0; i < rootType.NumField(); i++ {
+		structField := rootType.Field(i)
+		structFieldType := structField.Type
 
-		implementingType := exactType || (targetType.Kind() == reflect.Interface && dep.ReturnType.Implements(targetType))
+		resolver.resolveType(structFieldType)
+	}
 
-		if implementingType {
-			deps = append(deps, dep)
-			continue
+	// Resolve all types that were added initially
+	for i := 0; i < rootType.NumField(); i++ {
+		structField := rootType.Field(i)
+		structFieldType := structField.Type
+
+		rootValue := reflect.ValueOf(root).Elem()
+		rootValue.Field(i).Set(resolver.ValuesByType[structFieldType][0])
+	}
+}
+
+func (container *Container) findConstructors(_type reflect.Type) []*constructor {
+	var constructors []*constructor
+
+	for _, constructor := range container.constructors {
+		if constructor.ReturnType.AssignableTo(_type) {
+			constructors = append(constructors, constructor)
 		}
 	}
 
-	return deps
+	return constructors
 }
 
-func typeResolved(valuesByType valuesByTypeMap, targetType reflect.Type) bool {
-	_, ok := valuesByType[targetType]
+type constructor struct {
+	Function   reflect.Value
+	Parameters []reflect.Type
+	ReturnType reflect.Type
+}
+
+type valuesByType map[reflect.Type][]reflect.Value
+
+func (_valuesByType valuesByType) hasValue(_type reflect.Type, value reflect.Value) bool {
+	for _, value := range _valuesByType[_type] {
+		if value == value {
+			return true
+		}
+	}
+
+	return false
+}
+
+type resolver struct {
+	Container *Container
+
+	ValuesByType       valuesByType
+	VisitedTypes       map[reflect.Type]bool
+	ValueByConstructor map[*constructor]reflect.Value
+}
+
+func (_resolver *resolver) resolveType(_type reflect.Type) {
+	stack := list.New()
+	stack.PushFront(_type)
+
+	container := _resolver.Container
+
+	for stack.Len() > 0 {
+		typeElement := stack.Front()
+
+		rawType := typeElement.Value.(reflect.Type)
+		_type := innerType(rawType)
+
+		_resolver.VisitedTypes[_type] = true
+
+		// Resolve type by invoking all its constructors
+
+		constructors := container.findConstructors(_type)
+
+		if len(constructors) == 0 && rawType.Kind() != reflect.Slice {
+			panic(fmt.Sprintf("No constructor defined for type '%s'", _type))
+		}
+
+		var pendingConstructors []*constructor
+
+		if _type.Kind() != reflect.Slice {
+			for _, constructor := range constructors {
+				if value, ok := _resolver.constructorInvoked(constructor, _type); ok {
+					if !_resolver.ValuesByType.hasValue(_type, value) {
+						_resolver.ValuesByType[_type] = append(_resolver.ValuesByType[_type], value)
+					}
+				} else if _resolver.constructorInvokable(constructor) {
+					value := _resolver.invokeConstructor(constructor, _type)
+					_resolver.ValuesByType[_type] = append(_resolver.ValuesByType[_type], value)
+					_resolver.ValueByConstructor[constructor] = value
+				} else {
+					pendingConstructors = append(pendingConstructors, constructor)
+				}
+			}
+
+			if len(pendingConstructors) == 0 {
+				stack.Remove(typeElement)
+				continue
+			}
+		}
+
+		// Resolve missing parameters of pending constructors
+
+		for _, dep := range pendingConstructors {
+
+			for _, param := range dep.Parameters {
+				visited := _resolver.VisitedTypes[param]
+				resolved := _resolver.typeResolved(param)
+
+				if visited && !resolved {
+					panic(fmt.Sprintf(
+						"Cycle detected for parameter '%s' of constructor '%s' while resolving type '%s'.",
+						param, dep.Function.Type(), _type,
+					))
+				}
+
+				if !visited {
+					stack.PushFront(param)
+				}
+			}
+		}
+	}
+}
+
+func newResolver(container *Container) *resolver {
+	return &resolver{
+		Container: container,
+
+		ValuesByType:       make(map[reflect.Type][]reflect.Value),
+		VisitedTypes:       make(map[reflect.Type]bool),
+		ValueByConstructor: make(map[*constructor]reflect.Value),
+	}
+}
+
+func (_resolver *resolver) typeResolved(_type reflect.Type) bool {
+	_, ok := _resolver.ValuesByType[_type]
 	return ok
 }
 
-type valuesByTypeMap map[reflect.Type][]reflect.Value
-
-func innerType(rawTargetType reflect.Type) reflect.Type {
-	if rawTargetType.Kind() == reflect.Slice {
-		return rawTargetType.Elem()
+func innerType(rawType reflect.Type) reflect.Type {
+	if rawType.Kind() == reflect.Slice {
+		return rawType.Elem()
 	}
 
-	return rawTargetType
+	return rawType
 }
 
-func dependencyResolved(container *Container, valuesByType valuesByTypeMap, dep *dependency) bool {
-	for _, rawParamType := range dep.ParameterTypes {
-		paramType := innerType(rawParamType)
+func (_resolver *resolver) constructorInvokable(constructor *constructor) bool {
+	for _, rawParam := range constructor.Parameters {
+		param := innerType(rawParam)
 
-		if paramType.Kind() == reflect.Slice {
-			if len(valuesByType[paramType]) != len(container.findDependencies(paramType)) {
+		if param.Kind() == reflect.Slice {
+			if len(_resolver.ValuesByType[param]) != len(_resolver.Container.findConstructors(param)) {
 				return false
 			}
 
 			continue
 		}
 
-		if !typeResolved(valuesByType, paramType) {
+		if !_resolver.typeResolved(param) {
 			return false
 		}
 	}
@@ -113,106 +223,31 @@ func dependencyResolved(container *Container, valuesByType valuesByTypeMap, dep 
 	return true
 }
 
-func dependenciesResolved(container *Container, valuesByType valuesByTypeMap, deps []*dependency) bool {
-	for _, dep := range deps {
-		if !dependencyResolved(container, valuesByType, dep) {
-			return false
-		}
-	}
-
-	return true
-}
-
-func resolveDependency(valuesByType valuesByTypeMap, dep *dependency, targetType reflect.Type) {
+func (_resolver *resolver) invokeConstructor(constructor *constructor, _type reflect.Type) reflect.Value {
 	var arguments []reflect.Value
 
-	for _, rawParamType := range dep.ParameterTypes {
-		paramType := innerType(rawParamType)
+	for _, rawParam := range constructor.Parameters {
+		param := innerType(rawParam)
 
-		if rawParamType.Kind() == reflect.Slice {
-			paramSliceValue := reflect.MakeSlice(reflect.SliceOf(paramType), 0, 0)
-			paramSliceValue = reflect.Append(paramSliceValue, valuesByType[paramType]...)
+		if rawParam.Kind() == reflect.Slice {
+			paramSliceValue := reflect.MakeSlice(reflect.SliceOf(param), 0, 0)
+			paramSliceValue = reflect.Append(paramSliceValue, _resolver.ValuesByType[param]...)
 			arguments = append(arguments, paramSliceValue)
 			continue
 		}
 
-		if len(valuesByType[paramType]) > 1 {
-			panic(fmt.Sprintf("Ambiguous dependency '%s'", paramType))
+		if len(_resolver.ValuesByType[param]) > 1 {
+			panic(fmt.Sprintf("Ambiguity detected for type '%s'", param))
 		}
 
-		arguments = append(arguments, valuesByType[paramType][0])
+		arguments = append(arguments, _resolver.ValuesByType[param][0])
 	}
 
-	value := dep.ConstructorValue.Call(arguments)[0]
-	valuesByType[targetType] = append(valuesByType[targetType], value)
+	value := constructor.Function.Call(arguments)[0]
+	return value
 }
 
-func resolveDependencies(valuesByType valuesByTypeMap, deps []*dependency, targetType reflect.Type) {
-	for _, dep := range deps {
-		resolveDependency(valuesByType, dep, targetType)
-	}
-}
-
-// Resolve …
-func (container *Container) Resolve(root interface{}) {
-	rootType := reflect.TypeOf(root).Elem()
-
-	queue := list.New()
-
-	for i := 0; i < rootType.NumField(); i++ {
-		structField := rootType.Field(i)
-		structFieldType := structField.Type
-		queue.PushBack(structFieldType)
-	}
-
-	valuesByType := make(valuesByTypeMap)
-	visitedTypes := make(map[reflect.Type]bool)
-
-	for queue.Len() > 0 {
-		targetTypeElement := queue.Front()
-
-		rawTargetType := targetTypeElement.Value.(reflect.Type)
-		targetType := innerType(rawTargetType)
-
-		visitedTypes[targetType] = true
-
-		// Resolve type
-
-		targetDeps := container.findDependencies(targetType)
-
-		if len(targetDeps) == 0 && rawTargetType.Kind() != reflect.Slice {
-			panic(fmt.Sprintf("No constructor defined for dependency '%s'", targetType))
-		}
-
-		if targetType.Kind() != reflect.Slice {
-			if dependenciesResolved(container, valuesByType, targetDeps) {
-				resolveDependencies(valuesByType, targetDeps, targetType)
-				queue.Remove(targetTypeElement)
-				continue
-			}
-		}
-
-		// Resolve dependencies of type
-
-		for _, dep := range targetDeps {
-			for _, paramType := range dep.ParameterTypes {
-				if visitedTypes[paramType] {
-					panic(fmt.Sprintf("Cycle detected for dependency '%s'", paramType))
-				}
-
-				queue.PushBack(paramType)
-			}
-		}
-
-		queue.Remove(targetTypeElement)
-		queue.PushBack(rawTargetType)
-	}
-
-	for i := 0; i < rootType.NumField(); i++ {
-		structField := rootType.Field(i)
-		structFieldType := structField.Type
-
-		rootValue := reflect.ValueOf(root).Elem()
-		rootValue.Field(i).Set(valuesByType[structFieldType][0])
-	}
+func (_resolver *resolver) constructorInvoked(constructor *constructor, _type reflect.Type) (reflect.Value, bool) {
+	value, ok := _resolver.ValueByConstructor[constructor]
+	return value, ok
 }

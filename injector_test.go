@@ -172,52 +172,52 @@ func TestInterface(t *testing.T) {
 	}
 }
 
-type MultiApp struct {
-	Foo *MultiFoo
+type ImplementionApp struct {
+	Foo *ImplementionFoo
 }
 
-type MultiFoo struct {
-	bars []MultiBar
+type ImplementionFoo struct {
+	bars []ImplementionBar
 }
 
-type MultiBar interface {
+type ImplementionBar interface {
 	Bar() string
 }
 
-type MultiFirstBar struct {
+type ImplementionFirstBar struct {
 }
 
-func (bar *MultiFirstBar) Bar() string {
+func (bar *ImplementionFirstBar) Bar() string {
 	return "first_bar"
 }
 
-type MultiSecondBar struct {
+type ImplementionSecondBar struct {
 }
 
-func (bar *MultiSecondBar) Bar() string {
+func (bar *ImplementionSecondBar) Bar() string {
 	return "second_bar"
 }
 
-func NewMultiFoo(bars []MultiBar) *MultiFoo {
-	return &MultiFoo{
+func NewImplementionFoo(bars []ImplementionBar) *ImplementionFoo {
+	return &ImplementionFoo{
 		bars: bars,
 	}
 }
 
-func NewMultiFirstBar() *MultiFirstBar {
-	return &MultiFirstBar{}
+func NewImplementionFirstBar() *ImplementionFirstBar {
+	return &ImplementionFirstBar{}
 }
 
-func NewMultiSecondBar() *MultiSecondBar {
-	return &MultiSecondBar{}
+func NewImplementionSecondBar() *ImplementionSecondBar {
+	return &ImplementionSecondBar{}
 }
 
-func TestMulti(t *testing.T) {
+func TestImplemention(t *testing.T) {
 	container := NewContainer()
 
-	container.Register(NewMultiFoo, NewMultiFirstBar, NewMultiSecondBar)
+	container.Register(NewImplementionFoo, NewImplementionFirstBar, NewImplementionSecondBar)
 
-	app := &MultiApp{}
+	app := &ImplementionApp{}
 	container.Resolve(app)
 
 	bars := app.Foo.bars
@@ -381,63 +381,158 @@ func TestSimpleRoot(t *testing.T) {
 	}
 }
 
-// type SimpleRootApp struct {
-// 	Foo *SimpleRootFoo
-// 	Bar *SimpleRootBar
-// 	Baz *SimpleRootBaz
-// }
-//
-// type SimpleRootFoo struct {
-// 	value string
-// }
-//
-// type SimpleRootBar struct {
-// 	value string
-// }
-//
-// type SimpleRootBaz struct {
-// 	foo   *SimpleRootFoo
-// 	bar   *SimpleRootBar
-// 	value string
-// }
-//
-// func NewSimpleRootFoo() *SimpleRootFoo {
-// 	return &SimpleRootFoo{
-// 		value: "foo",
-// 	}
-// }
-//
-// func NewSimpleRootBar() *SimpleRootBar {
-// 	return &SimpleRootBar{
-// 		value: "bar",
-// 	}
-// }
-//
-// func NewSimpleRootBaz(foo *SimpleRootFoo, bar *SimpleRootBar) *SimpleRootBaz {
-// 	return &SimpleRootBaz{
-// 		foo:   foo,
-// 		bar:   bar,
-// 		value: "baz",
-// 	}
-// }
-//
-// func TestSimpleRoot(t *testing.T) {
-// 	container := NewContainer()
-//
-// 	container.Register(NewSimpleRootBaz, NewSimpleRootBar, NewSimpleRootFoo)
-//
-// 	app := &SimpleRootApp{}
-// 	container.Resolve(app)
-//
-// 	if app.Foo.value != "foo" {
-// 		t.Errorf("Foo could not be resolved")
-// 	}
-//
-// 	if app.Bar.value != "bar" {
-// 		t.Errorf("Bar could not be resolved")
-// 	}
-//
-// 	if app.Baz.value != "baz" || app.Baz.foo != app.Foo || app.Baz.bar != app.Bar {
-// 		t.Errorf("Baz could not be resolved")
-// 	}
-// }
+type PolymorphApp struct {
+	Foo      *PolymorphFoo
+	OtherFoo PolymorphFooInterface
+}
+
+type PolymorphFoo struct {
+	value string
+}
+
+func (foo *PolymorphFoo) Value() string {
+	return "foo"
+}
+
+type PolymorphFooInterface interface {
+	Value() string
+}
+
+func NewPolymorphFoo() *PolymorphFoo {
+	return &PolymorphFoo{
+		value: "foo",
+	}
+}
+
+func TestPolymorph(t *testing.T) {
+	container := NewContainer()
+
+	container.Register(NewPolymorphFoo)
+
+	app := &PolymorphApp{}
+	container.Resolve(app)
+
+	if app.Foo.value != "foo" {
+		t.Errorf("Foo could not be resolved")
+	}
+
+	if app.OtherFoo.Value() != "foo" {
+		t.Errorf("OtherFoo could not be resolved")
+	}
+}
+
+type ComplexRootApp struct {
+	Foo *ComplexRootFoo
+	Bar *ComplexRootBar
+	Baz *ComplexRootBaz
+}
+
+type ComplexRootFoo struct {
+	value string
+}
+
+type ComplexRootBar struct {
+	foo   *ComplexRootFoo
+	value string
+}
+
+type ComplexRootBaz struct {
+	foo   *ComplexRootFoo
+	value string
+}
+
+func NewComplexRootFoo() *ComplexRootFoo {
+	return &ComplexRootFoo{
+		value: "foo",
+	}
+}
+
+func NewComplexRootBar(foo *ComplexRootFoo) *ComplexRootBar {
+	return &ComplexRootBar{
+		foo:   foo,
+		value: "bar",
+	}
+}
+
+func NewComplexRootBaz(foo *ComplexRootFoo) *ComplexRootBaz {
+	return &ComplexRootBaz{
+		foo:   foo,
+		value: "baz",
+	}
+}
+
+func TestComplexRoot(t *testing.T) {
+	container := NewContainer()
+
+	container.Register(NewComplexRootBaz, NewComplexRootBar, NewComplexRootFoo)
+
+	app := &ComplexRootApp{}
+	container.Resolve(app)
+
+	if app.Foo.value != "foo" {
+		t.Errorf("Foo could not be resolved")
+	}
+
+	if app.Bar.value != "bar" || app.Bar.foo != app.Foo {
+		t.Errorf("Bar could not be resolved")
+	}
+
+	if app.Baz.value != "baz" || app.Baz.foo != app.Foo {
+		t.Errorf("Baz could not be resolved")
+	}
+}
+
+type MultiApp struct {
+	Foo *MultiFoo
+}
+
+type MultiFoo struct {
+	bars []MultiBar
+}
+
+type MultiBar interface {
+	Bar() string
+}
+
+type MultiFirstBar struct {
+}
+
+func (bar *MultiFirstBar) Bar() string {
+	return "first_bar"
+}
+
+type MultiSecondBar struct {
+}
+
+func (bar *MultiSecondBar) Bar() string {
+	return "second_bar"
+}
+
+func NewMultiFoo(bars []MultiBar) *MultiFoo {
+	return &MultiFoo{
+		bars: bars,
+	}
+}
+
+func NewMultiFirstBar() *MultiFirstBar {
+	return &MultiFirstBar{}
+}
+
+func NewMultiSecondBar() *MultiSecondBar {
+	return &MultiSecondBar{}
+}
+
+func TestMulti(t *testing.T) {
+	container := NewContainer()
+
+	container.Register(NewMultiFoo, NewMultiFirstBar, NewMultiSecondBar)
+
+	app := &MultiApp{}
+	container.Resolve(app)
+
+	bars := app.Foo.bars
+
+	if len(bars) != 2 || bars[0].Bar() != "first_bar" || bars[1].Bar() != "second_bar" {
+		t.Errorf("Foo could not be resolved")
+	}
+}
