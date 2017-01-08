@@ -6,17 +6,38 @@ import (
 	"reflect"
 )
 
-// Container …
+// Container keeps track of all dependencies that were registered.
 type Container struct {
 	constructors []*constructor
 }
 
-// NewContainer …
+// NewContainer creates a new empty container.
 func NewContainer() *Container {
 	return &Container{}
 }
 
-// Register …
+// Register registers new dependencies based on constructor functions. A
+// constructor is a function that takes zero or more parameters and returns
+// exactly one dependency as value.
+//
+//   func NewBaz(foo *Foo, bar *Bar) *Baz {…}
+//
+// The paramters type can be one of the following:
+//
+// A pointer to a struct. Exactly one dependency must be registered that returns
+// an instance of that struct.
+//
+//   func NewBar(foo *Foo) *Baz {…} // Inject Foo dependency
+//
+// An interface. Exactly one dependency must be registered that returns
+// an instance of a struct that implements that interface.
+//
+//   func NewBar(foo Foo) *Baz {…} // Inject dependency that implements the Foo interface
+//
+// A slice type using an interface. At least one dependency must be registered that returns
+// an instance of a struct that implements that interface.
+//
+//   func NewBar(foos []Foo) *Baz {…} // Inject all dependencies that implement the Foo interface
 func (container *Container) Register(constructors ...interface{}) {
 	for _, _constructor := range constructors {
 		_type := reflect.TypeOf(_constructor)
@@ -50,7 +71,8 @@ func (container *Container) Register(constructors ...interface{}) {
 	}
 }
 
-// Resolve …
+// Resolve wires together the object graph starting with the fields
+// in the given struct instance.
 func (container *Container) Resolve(root interface{}) {
 	resolver := newResolver(container)
 
